@@ -4,10 +4,11 @@ BookMyShow Ticket-Drop Alarm - GitHub Actions edition
 Runs ONE check pass per execution (GitHub Actions re-triggers this on a
 schedule, e.g. every 5 minutes - there's no infinite loop needed here).
 
-Checks each BookMyShow date page for "Allu Cinemas" and fires a loud
-Pushover EMERGENCY alert the moment a target becomes bookable. Remembers
-which targets already fired (alerted_state.json, committed back to this
-repo by the workflow) so it won't re-alert on every run.
+Watches Allu Cinemas: Kokapet's own date-specific BookMyShow page (URL
+pattern: .../buytickets/ALUC/YYYYMMDD) and fires a loud Pushover EMERGENCY
+alert the moment the target movie's name appears in that date's listing.
+Remembers which targets already fired (alerted_state.json, committed back
+to this repo by the workflow) so it won't re-alert on every run.
 """
 
 import os
@@ -22,26 +23,38 @@ PUSHOVER_APP_TOKEN = os.environ["PUSHOVER_APP_TOKEN"]
 
 WATCHES = [
     {
+        "label": "The Odyssey - Fri 17 Jul",
+        "url": "https://in.bookmyshow.com/cinemas/HYD/allu-cinemas-kokapet/buytickets/ALUC/20260717",
+        "match_text": "Odyssey",
+    },
+    {
         "label": "The Odyssey - Sat 18 Jul",
-        "url": "PASTE_URL_HERE",
-        "cinema_match": "Allu Cinemas",
+        "url": "https://in.bookmyshow.com/cinemas/HYD/allu-cinemas-kokapet/buytickets/ALUC/20260718",
+        "match_text": "Odyssey",
     },
     {
         "label": "The Odyssey - Sun 19 Jul",
-        "url": "PASTE_URL_HERE",
-        "cinema_match": "Allu Cinemas",
+        "url": "https://in.bookmyshow.com/cinemas/HYD/allu-cinemas-kokapet/buytickets/ALUC/20260719",
+        "match_text": "Odyssey",
     },
     {
         "label": "Spider-Man: Brand New Day - Sat 1 Aug",
-        "url": "PASTE_URL_HERE",
-        "cinema_match": "Allu Cinemas",
+        "url": "https://in.bookmyshow.com/cinemas/HYD/allu-cinemas-kokapet/buytickets/ALUC/20260801",
+        "match_text": "Brand New Day",
     },
     {
         "label": "Spider-Man: Brand New Day - Sun 2 Aug",
-        "url": "PASTE_URL_HERE",
-        "cinema_match": "Allu Cinemas",
+        "url": "https://in.bookmyshow.com/cinemas/HYD/allu-cinemas-kokapet/buytickets/ALUC/20260802",
+        "match_text": "Brand New Day",
     },
 ]
+
+# Note: these dates are currently too far out and BookMyShow redirects them
+# back to today's date - that's expected and safe. The check below will
+# simply find no match (correctly reporting "not live yet") until
+# BookMyShow itself opens that date in its calendar, at which point the
+# same URL starts showing the real listing and detection kicks in
+# automatically - no need to update these URLs manually later.
 
 STATE_FILE = Path("alerted_state.json")
 
@@ -81,7 +94,7 @@ def check_one(page, watch):
     page.goto(watch["url"], wait_until="networkidle", timeout=30000)
     page.wait_for_timeout(2000)  # let client-side rendering settle
     content = page.content()
-    return watch["cinema_match"].lower() in content.lower()
+    return watch["match_text"].lower() in content.lower()
 
 
 def main():
@@ -113,7 +126,7 @@ def main():
                 print(f"[{label}] BOOKING IS LIVE!")
                 send_emergency_alert(
                     f"Tickets live: {label}",
-                    "Allu Cinemas Kokapet just listed this show. Book now.",
+                    "Allu Cinemas Kokapet just listed this show on this date. Book now.",
                 )
                 state[label] = True
             else:

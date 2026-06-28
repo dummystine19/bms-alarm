@@ -1,0 +1,58 @@
+name: BMS Alarm
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # runs every 5 minutes, all day, every day
+  workflow_dispatch:
+    inputs:
+      test_alert:
+        description: 'Send a test alert instead of checking BookMyShow'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # needed so the workflow can commit the updated state file
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Playwright browser (speeds up every run after the first)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}
+
+      - name: Install dependencies
+        run: |
+          pip install playwright requests
+          playwright install --with-deps chromium
+
+      - name: Run check (or test alert)
+        env:
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+        run: |
+          if [ "${{ inputs.test_alert }}" == "true" ]; then
+            python bms_alarm.py --test
+          else
+            python bms_alarm.py
+          fi
+
+      - name: Commit updated alert state (only if it changed)
+        run: |
+          git config user.name "bms-alarm-bot"
+          git config user.email "actions@users.noreply.github.com"
+          if ! git diff --quiet -- alerted_state.json; then
+            git add alerted_state.json
+            git commit -m "Mark alert as sent"
+            git push
+          else
+            echo "No state change, nothing to commit."
+          fi

@@ -91,8 +91,17 @@ def send_emergency_alert(title, message):
 
 
 def check_one(page, watch):
+    expected_date = watch["url"].rstrip("/").split("/")[-1]  # the YYYYMMDD at the end
     page.goto(watch["url"], wait_until="networkidle", timeout=30000)
     page.wait_for_timeout(2000)  # let client-side rendering settle
+
+    if expected_date not in page.url:
+        # BookMyShow redirected us away from the requested date (it's not
+        # open in their calendar yet) - definitely not live, skip the text
+        # check entirely so we don't get fooled by "Coming Soon" promo
+        # banners that mention the movie name on the page we got bounced to.
+        return False
+
     content = page.content()
     return watch["match_text"].lower() in content.lower()
 

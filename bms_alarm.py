@@ -1,58 +1,131 @@
-name: BMS Alarm
+"""
+BookMyShow Ticket-Drop Alarm - GitHub Actions edition
+======================================================
+Runs ONE check pass per execution (GitHub Actions re-triggers this on a
+schedule, e.g. every 5 minutes - there's no infinite loop needed here).
 
-on:
-  schedule:
-    - cron: '*/5 * * * *'   # runs every 5 minutes, all day, every day
-  workflow_dispatch:
-    inputs:
-      test_alert:
-        description: 'Send a test alert instead of checking BookMyShow'
-        type: boolean
-        default: false
+Checks each BookMyShow date page for "Allu Cinemas" and fires a loud
+Pushover EMERGENCY alert the moment a target becomes bookable. Remembers
+which targets already fired (alerted_state.json, committed back to this
+repo by the workflow) so it won't re-alert on every run.
+"""
 
-permissions:
-  contents: write   # needed so the workflow can commit the updated state file
+import os
+import sys
+import json
+import requests
+from pathlib import Path
+from playwright.sync_api import sync_playwright
 
-jobs:
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+PUSHOVER_USER_KEY = os.environ["PUSHOVER_USER_KEY"]
+PUSHOVER_APP_TOKEN = os.environ["PUSHOVER_APP_TOKEN"]
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+WATCHES = [
+    {
+        "label": "The Odyssey - Sat 18 Jul",
+        "url": "PASTE_URL_HERE",
+        "cinema_match": "Allu Cinemas",
+    },
+    {
+        "label": "The Odyssey - Sun 19 Jul",
+        "url": "PASTE_URL_HERE",
+        "cinema_match": "Allu Cinemas",
+    },
+    {
+        "label": "Spider-Man: Brand New Day - Sat 1 Aug",
+        "url": "PASTE_URL_HERE",
+        "cinema_match": "Allu Cinemas",
+    },
+    {
+        "label": "Spider-Man: Brand New Day - Sun 2 Aug",
+        "url": "PASTE_URL_HERE",
+        "cinema_match": "Allu Cinemas",
+    },
+]
 
-      - name: Cache Playwright browser (speeds up every run after the first)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}
+STATE_FILE = Path("alerted_state.json")
 
-      - name: Install dependencies
-        run: |
-          pip install playwright requests
-          playwright install --with-deps chromium
 
-      - name: Run check (or test alert)
-        env:
-          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
-          PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
-        run: |
-          if [ "${{ inputs.test_alert }}" == "true" ]; then
-            python bms_alarm.py --test
-          else
-            python bms_alarm.py
-          fi
+def load_state():
+    if STATE_FILE.exists():
+        return json.loads(STATE_FILE.read_text())
+    return {}
 
-      - name: Commit updated alert state (only if it changed)
-        run: |
-          git config user.name "bms-alarm-bot"
-          git config user.email "actions@users.noreply.github.com"
-          if ! git diff --quiet -- alerted_state.json; then
-            git add alerted_state.json
-            git commit -m "Mark alert as sent"
-            git push
-          else
-            echo "No state change, nothing to commit."
-          fi
+
+def save_state(state):
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def send_emergency_alert(title, message):
+    """Pushover priority-2 'Emergency' alert: loud siren, repeats every 60s
+    until acknowledged in the app, auto-stops after 3 hours either way."""
+    resp = requests.post(
+        "https://api.pushover.net/1/messages.json",
+        data={
+            "token": PUSHOVER_APP_TOKEN,
+            "user": PUSHOVER_USER_KEY,
+            "title": title,
+            "message": message,
+            "priority": 2,
+            "retry": 60,
+            "expire": 10800,
+            "sound": "siren",
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    print(f"[ALERT SENT] {title}")
+
+
+def check_one(page, watch):
+    page.goto(watch["url"], wait_until="networkidle", timeout=30000)
+    page.wait_for_timeout(2000)  # let client-side rendering settle
+    content = page.content()
+    return watch["cinema_match"].lower() in content.lower()
+
+
+def main():
+    state = load_state()
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            )
+        )
+        page = context.new_page()
+
+        for watch in WATCHES:
+            label = watch["label"]
+            if state.get(label):
+                print(f"[{label}] already alerted, skipping.")
+                continue
+
+            try:
+                found = check_one(page, watch)
+            except Exception as e:
+                print(f"[{label}] check failed: {e}")
+                continue
+
+            if found:
+                print(f"[{label}] BOOKING IS LIVE!")
+                send_emergency_alert(
+                    f"Tickets live: {label}",
+                    "Allu Cinemas Kokapet just listed this show. Book now.",
+                )
+                state[label] = True
+            else:
+                print(f"[{label}] not live yet.")
+
+        browser.close()
+
+    save_state(state)
+
+
+if __name__ == "__main__":
+    if "--test" in sys.argv:
+        send_emergency_alert("Test alert", "If your phone just buzzed loudly, Pushover is working.")
+    else:
+        main()
